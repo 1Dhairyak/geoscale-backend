@@ -1,0 +1,91 @@
+package com.geoscale.service;
+
+import com.geoscale.dto.request.AuthRequest;
+import com.geoscale.dto.response.AuthResponse;
+import com.geoscale.entity.User;
+import com.geoscale.exception.ConflictException;
+import com.geoscale.repository.UserRepository;
+import com.geoscale.security.JwtTokenProvider;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+@Service
+public class AuthService {
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final AuthenticationManager authenticationManager;
+    private final UserDetailsService userDetailsService;
+
+    public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
+                       JwtTokenProvider jwtTokenProvider, AuthenticationManager authenticationManager,
+                       UserDetailsService userDetailsService) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.authenticationManager = authenticationManager;
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Transactional
+    public AuthResponse register(AuthRequest.Register request) {
+        if (userRepository.existsByUsername(request.getUsername()))
+            throw new ConflictException("Username already taken");
+        if (userRepository.existsByEmail(request.getEmail()))
+            throw new ConflictException("Email already registered");
+
+        User user = User.builder()
+                .username(request.getUsername())
+                .email(request.getEmail())
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .build();
+        userRepository.save(user);
+        return buildResponse(user);
+    }
+
+    @Transactional
+    public AuthResponse login(AuthRequest.Login request) {
+        authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(request.getUsername(), request.getPassword()));
+        User user = userRepository.findByUsername(request.getUsername()).orElseThrow();
+        return buildResponse(user);
+    }
+
+    @Transactional
+    public AuthResponse refresh(String refreshToken) {
+        User user = userRepository.findByRefreshToken(refreshToken)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid refresh token"));
+        return buildResponse(user);
+    }
+
+    @Transactional
+    public void logout(String refreshToken) {
+        userRepository.findByRefreshToken(refreshToken).ifPresent(user -> {
+            user.setRefreshToken(null);
+            userRepository.save(user);
+        });
+    }
+
+    private AuthResponse buildResponse(User user) {
+        UserDetails userDetails = userDetailsService.loadUserByUsername(user.getUsername());
+        String accessToken = jwtTokenProvider.generateToken(userDetails);
+        String refreshToken = jwtTokenProvider.generateRefreshToken();
+        user.setRefreshToken(refreshToken);
+        userRepository.save(user);
+        return AuthResponse.builder()
+                .token(accessToken)
+                .refreshToken(refreshToken)
+                .username(user.getUsername())
+                .email(user.getEmail())
+                .role(user.getRole().name())
+                .build();
+    }
+}
