@@ -56,10 +56,11 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public ErrorBody handleGeneric(Exception ex) {
         log.error("Unhandled exception", ex);
-        return body(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred");
+        return body(HttpStatus.INTERNAL_SERVER_ERROR, ex.getClass().getName() + ": " + ex.getMessage());
     }
 
     private ErrorBody body(HttpStatus status, Object message) {
         return new ErrorBody(status.value(), status.getReasonPhrase(), message, Instant.now());
     }
 }
+
